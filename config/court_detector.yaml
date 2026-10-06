@@ -1,0 +1,135 @@
+# =============================================================================
+# pitch_view 统一配置
+# -----------------------------------------------------------------------------
+# 用途:
+#   1) ROS2 节点: launch 加载本文件 → court_detector.ros__parameters
+#   2) Qt / CLI 脚本 (scripts/run_homography.py 等): 读取同一份参数
+#
+# 修改后重启节点 / 重新打开 GUI 才会生效。
+# 权重默认路径相对于仓库根目录 (与 models/ 打包目录一致)。
+# =============================================================================
+
+court_detector:
+  ros__parameters:
+
+    # -------------------------------------------------------------------------
+    # 通用 / 俯视图
+    # -------------------------------------------------------------------------
+
+    # 运动项目配置: soccer (足球场 32 关键点) 或 basketball (篮球场)
+    sport: soccer
+
+    # 俯视图分辨率: 每「厘米」对应多少像素。越大图越大、越清晰，也越耗内存。
+    #   例: 0.05 → 105m 球场约 5250px 长; 0.1 → 约 10500px
+    scale: 0.05
+
+    # 推理设备: cpu / cuda (有 NVIDIA GPU 时用 cuda 更快)
+    device: cpu
+
+    # -------------------------------------------------------------------------
+    # 球场关键点检测
+    # -------------------------------------------------------------------------
+
+    # 检测方法:
+    #   inference  — 本机 Roboflow 模型 (权重缓存到磁盘，推荐流式)
+    #   roboflow   — Roboflow 云端 HTTP
+    #   yolo       — 本地 YOLO 关键点 .pt (见 model_path)
+    #   homography — 固定机位，用标定 JSON (见 homography_file)
+    #   classical  — Canny + Hough 找四角 (篮球等简易场景)
+    detector_type: inference
+
+    # YOLO 关键点权重路径 (仅 detector_type=yolo)。
+    # scripts/train.py 训完会发布到此文件。
+    model_path: "models/pitch_keypoints.pt"
+
+    # 固定机位标定 JSON (仅 detector_type=homography)。
+    # 由 scripts/calibrate.py / calibrate_gui.py 生成。
+    homography_file: ""
+
+    # Roboflow API key (detector_type=inference / roboflow)。
+    # 也可设环境变量 ROBOFLOW_API_KEY，不必写进本文件。
+    api_key: ""
+
+    # Roboflow 模型 ID (inference / roboflow)。足球公开模型返回 32 个球场关键点。
+    model_id: "football-field-detection-f07vi/14"
+
+    # Roboflow 服务地址 (一般不用改)
+    api_url: "https://serverless.roboflow.com"
+
+    # 关键点最低置信度。低于此值的点不参与单应性求解。
+    # 0.0 = 交给模型默认可见度过滤 (YOLO 内部约 0.25)；设 0.3~0.5 可更严。
+    min_confidence: 0.0
+
+    # -------------------------------------------------------------------------
+    # 经典 CV 四角检测 (仅 detector_type=classical)
+    # -------------------------------------------------------------------------
+
+    # Canny 边缘检测低阈值 (越小边缘越多、越噪)
+    canny_low: 50
+
+    # Canny 边缘检测高阈值
+    canny_high: 150
+
+    # Hough 直线投票阈值 (越大线越少、越「硬」)
+    hough_threshold: 80
+
+    # Hough 最短线段长度 (像素)
+    min_line_length: 100
+
+    # Hough 允许的线段间隙 (像素)
+    max_line_gap: 30
+
+    # -------------------------------------------------------------------------
+    # 球员 / 球 / 裁判检测 (GUI「球员推理」；权重见 player_model_path)
+    # -------------------------------------------------------------------------
+
+    # 球员检测权重。scripts/train_players.py 训完发布到此文件。
+    player_model_path: "models/players.pt"
+
+    # YOLO 检测置信度阈值。低于此分数的框直接丢掉。
+    # 越小召回越高、误检越多；越大越干净、易漏检。常用 0.2~0.4。
+    player_conf: 0.60
+
+    # YOLO NMS 的 IoU 阈值 (框重叠多少算「同一个目标」)。
+    # 越小去重越狠；越大越容易同一人留多个框。
+    player_iou: 0.45
+
+    # 是否跨类别 NMS (player / GK / ref 互相抑制)。
+    # true 可减少「同一人叠两个框」；false 则按类别分别 NMS。
+    player_agnostic_nms: true
+
+    # 后处理: 两框 IoU ≥ 此值则只留高分框 (与 YOLO NMS 互补，做人/球分组去重)。
+    player_nms_iou: 0.45
+
+    # 后处理: 小框被大框「包含」比例 ≥ 此值也去掉小框
+    # (例: 嵌套的重复 player 框)。0~1。
+    player_nms_contain: 0.7
+
+    # -------------------------------------------------------------------------
+    # 球衣号码 OCR (GUI「号码识别」；EasyOCR 权重在 models/*.pth)
+    # -------------------------------------------------------------------------
+
+    # OCR 结果最低置信度。低于此值的数字串丢弃。
+    jersey_ocr_min_conf: 0.35
+
+    # 从球员框裁「胸前」区域时，左右各内缩的比例 (相对框宽)。
+    jersey_torso_x_margin: 0.18
+
+    # 胸前区域上边界: 距框顶的比例 (相对框高)。
+    jersey_torso_y0: 0.10
+
+    # 胸前区域下边界: 距框顶的比例 (相对框高)。号码通常在上半身。
+    jersey_torso_y1: 0.52
+
+    # -------------------------------------------------------------------------
+    # 点击特写 (GUI 点选球员框后的放大面板)
+    # -------------------------------------------------------------------------
+
+    # 特写裁剪相对检测框外扩比例 (四周 padding)。
+    closeup_pad_ratio: 0.18
+
+    # 特写最大放大倍数上限 (相对裁剪原尺寸)。
+    closeup_max_scale: 5.0
+
+    # 视频流中跟踪已选球员: 与上一帧框 IoU ≥ 此值则视为同一人并更新特写。
+    closeup_track_iou: 0.3

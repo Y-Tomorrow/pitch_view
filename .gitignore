@@ -1,0 +1,30 @@
+# 数据集（体积大，训练时用 scripts 从 Roboflow 重新下载）
+football-field-detection-14/
+football-players-detection-12/
+
+# ROS 2 / colcon 编译与安装产物
+build/
+install/
+log/
+
+# Python 字节码与打包缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ultralytics 训练中间产物（正式权重复制到 models/）
+runs/
+
+# 训练用的预训练底模（Ultralytics 缺文件时会自动下载，不入库）
+/yolov8m.pt
+/yolov8m-pose.pt
+/weights/*.pt
+
+# 从 Windows 拷来的下载标记
+*:Zone.Identifier
