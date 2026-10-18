@@ -35,7 +35,7 @@ def main() -> None:
         help="Detector implementation (default: classical).")
     parser.add_argument(
         "--model", default="",
-        help="Model path when --detector yolo (default: models/pitch_keypoints.pt).")
+        help="Model path when --detector yolo (default: weights/pitch_keypoints.pt).")
     args = parser.parse_args()
 
     config = SoccerPitchConfiguration()

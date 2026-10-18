@@ -24,9 +24,25 @@ Implementations:
 via the ``detector_type`` parameter.
 """
 import json
+import sys
 from typing import List, Protocol, Tuple
 
 import numpy as np
+
+
+def _cuda_or_cpu(device: str):
+    """Use CUDA FP16 when a GPU is available. Otherwise stay on CPU FP32."""
+    device = str(device or "cpu")
+    if not device.startswith("cuda"):
+        return device, False
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return device, True
+    except Exception:
+        pass
+    print("[detector] CUDA 不可用，改用 CPU。", file=sys.stderr, flush=True)
+    return "cpu", False
 
 
 class KeyPointDetector(Protocol):
@@ -221,6 +237,7 @@ class YoloKeyPointDetector:
         self.device = device
         self.min_confidence = min_confidence
         self._model = None
+        self._half = False
 
     def load(self) -> None:
         if not self.model_path:
@@ -233,12 +250,15 @@ class YoloKeyPointDetector:
             raise ImportError(
                 "YoloKeyPointDetector requires `ultralytics` "
                 "(pip install ultralytics).") from exc
+        self.device, self._half = _cuda_or_cpu(self.device)
         self._model = YOLO(self.model_path).to(self.device)
 
     def detect(self, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         if self._model is None:
             self.load()
-        result = self._model(frame, verbose=False)[0]
+        result = self._model(
+            frame, verbose=False, device=self.device, imgsz=640,
+            **({"quantize": 16} if self._half else {}))[0]
         keypoints = getattr(result, "keypoints", None)
         if keypoints is None or getattr(keypoints, "xy", None) is None \
                 or len(keypoints.xy) == 0:

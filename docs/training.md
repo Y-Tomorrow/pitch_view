@@ -99,13 +99,8 @@ yolo pose train \
 
 ## 6. 训练好之后怎么接回本项目
 
-`scripts/train.py` 训完会把 `best.pt` **发布到** `models/pitch_keypoints.pt`
-（与推理默认路径一致）。`config/court_detector.yaml` 已默认:
-
-```yaml
-detector_type: yolo
-model_path: "models/pitch_keypoints.pt"
-```
+`scripts/train.py` 训完会把 `best.pt` **发布到** `weights/pitch_keypoints.pt`。
+当前界面选 YOLO 时读的是 `runs/pose/train/weights/best.pt`（`config/court_detector.yaml` 的 `model_path`）。
 
 其余代码(单应性、top-down 映射、发布)不用改——接口已预留好。
 
@@ -138,14 +133,14 @@ python3 scripts/train_players.py \
   --data-dir football-players-detection-12 --epochs 100 --model yolov8m.pt
 ```
 
-训完自动发布到 `models/players.pt`（GUI「球员推理」默认读这个）。
+训完自动发布到 `weights/players.pt`（GUI「球员推理」默认读这个）。
 Ultralytics 中间日志仍在 `runs/player/`。
 
 建议:
 
 - 先公开数据训一版跑通,再混入你自己机位抽帧(同一 4 类框标注)。
 - 机位差异大时补几百张通常比硬用官方权重更稳。
-- 号码 OCR **不在**这份数据里;EasyOCR 权重也放在同一 `models/` 目录。
+- 号码 OCR **不在**这份数据里;EasyOCR 权重也放在同一 `weights/` 目录。
 
-训好后:用 `models/players.pt` 做球员框检测,取框底边中点,经现有球场
+训好后:用 `weights/players.pt` 做球员框检测,取框底边中点,经现有球场
 `ViewTransformer` 投到俯视图。

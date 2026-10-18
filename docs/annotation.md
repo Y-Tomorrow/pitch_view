@@ -76,12 +76,11 @@ python3 scripts/train.py --download --epochs 100 --model yolov8x-pose.pt
 
 ## 5. 接入
 
-`scripts/train.py` 训完发布到 `models/pitch_keypoints.pt`；
-[court_detector.yaml](../config/court_detector.yaml) 默认:
+`scripts/train.py` 训完发布到 `weights/pitch_keypoints.pt`。
+[court_detector.yaml](../config/court_detector.yaml) 里当前的 YOLO 默认是:
 
 ```yaml
-detector_type: yolo
-model_path: "models/pitch_keypoints.pt"
+model_path: "runs/pose/train/weights/best.pt"
 ```
 
 其余单应性/top-down/发布代码不用改(接口已预留)。

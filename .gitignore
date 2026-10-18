@@ -18,7 +18,7 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
-# Ultralytics 训练中间产物（正式权重复制到 models/）
+# Ultralytics 训练中间产物（正式权重复制到 weights/）
 runs/
 
 # 训练用的预训练底模（Ultralytics 缺文件时会自动下载，不入库）
@@ -28,3 +28,8 @@ runs/
 
 # 从 Windows 拷来的下载标记
 *:Zone.Identifier
+
+# PaddleOCR 运行时缓存（权重在 weights/paddle_ocr/official_models/）
+weights/paddle_ocr/locks/
+weights/paddle_ocr/temp/
+weights/paddle_ocr/func_ret/

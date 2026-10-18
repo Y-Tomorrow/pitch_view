@@ -15,7 +15,7 @@ Examples:
     # already downloaded
     python3 scripts/train_players.py --data-dir football-players-detection-12 --epochs 100
 
-Trained ``best.pt`` is published to ``models/players.pt`` (same folder as
+Trained ``best.pt`` is published to ``weights/players.pt`` (same folder as
 inference). Intermediate Ultralytics logs stay under ``runs/player/``.
 Dataset downloads into the project root, next to football-field-detection-14.
 """
@@ -150,7 +150,7 @@ def main() -> None:
 
     from ultralytics import YOLO
 
-    # Ultralytics logs → runs/player/<name>; packaged weight → models/players.pt
+    # Ultralytics logs → runs/player/<name>; packaged weight → weights/players.pt
     os.chdir(_ROOT)
     model = YOLO(args.model)
     model.train(

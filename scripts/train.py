@@ -11,7 +11,7 @@ Examples:
 
     python scripts/train.py --data-dir /path/to/dataset --epochs 100
 
-Trained ``best.pt`` is published to ``models/pitch_keypoints.pt`` (same folder
+Trained ``best.pt`` is published to ``weights/pitch_keypoints.pt`` (same folder
 as inference). Intermediate Ultralytics logs stay under ``runs/pose/``.
 
 The 32 pitch keypoints must stay in the order defined by
@@ -19,6 +19,7 @@ The 32 pitch keypoints must stay in the order defined by
 """
 import argparse
 import os
+import shlex
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,6 +82,12 @@ def main() -> None:
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--device", default="")
+    parser.add_argument("--run-dir", default=os.path.join(_ROOT, "runs", "pose"),
+                        help="Ultralytics run directory (default: <repo>/runs/pose).")
+    parser.add_argument("--name", default="train",
+                        help="Run name under --run-dir (default: train).")
+    parser.add_argument("--no-publish", action="store_true",
+                        help="Keep best.pt under --run-dir and do not copy it to weights/.")
     parser.add_argument("--kpt-shape", nargs=2, type=int, default=[32, 3],
                         metavar=("N", "DIM"),
                         help="Keypoint shape [num_keypoints, dim] (default 32 3).")
@@ -104,6 +111,16 @@ def main() -> None:
         os.path.join(data_dir, "pitch_view_data.yaml"))
     print(f"data.yaml: {data_yaml}")
 
+    run_dir = os.path.abspath(args.run_dir)
+    save_dir = os.path.join(run_dir, args.name)
+    os.makedirs(save_dir, exist_ok=True)
+    command = shlex.join(sys.argv)
+    command_path = os.path.join(save_dir, "command.txt")
+    with open(command_path, "w") as f:
+        f.write(command + "\n")
+    print(f"command: {command}")
+    print(f"command saved: {command_path}")
+
     from ultralytics import YOLO
 
     os.chdir(_ROOT)
@@ -114,14 +131,17 @@ def main() -> None:
         imgsz=args.imgsz,
         batch=args.batch,
         device=args.device or None,
-        project=os.path.join("runs", "pose"),
-        name="train",
+        project=run_dir,
+        name=args.name,
         exist_ok=True,
     )
     best = resolve_trained_best(model.trainer)
-    out = publish_weight(best, pitch_keypoints_path())
-    print(f"Training finished. Published: {out}")
-    print(f"(Ultralytics run also kept at {model.trainer.save_dir})")
+    if args.no_publish:
+        print(f"Training finished. Weights kept at {best}")
+    else:
+        out = publish_weight(best, pitch_keypoints_path())
+        print(f"Training finished. Published: {out}")
+    print(f"(Ultralytics run kept at {model.trainer.save_dir})")
 
 
 if __name__ == "__main__":

@@ -3,10 +3,10 @@
 # -----------------------------------------------------------------------------
 # 用途:
 #   1) ROS2 节点: launch 加载本文件 → court_detector.ros__parameters
-#   2) Qt / CLI 脚本 (scripts/run_homography.py 等): 读取同一份参数
+#   2) Qt / CLI 脚本 (scripts/run_pitch_view.py 等): 读取同一份参数
 #
 # 修改后重启节点 / 重新打开 GUI 才会生效。
-# 权重默认路径相对于仓库根目录 (与 models/ 打包目录一致)。
+# 权重默认路径相对于仓库根目录 (与 weights/ 打包目录一致)。
 # =============================================================================
 
 court_detector:
@@ -24,7 +24,7 @@ court_detector:
     scale: 0.05
 
     # 推理设备: cpu / cuda (有 NVIDIA GPU 时用 cuda 更快)
-    device: cpu
+    device: cuda
 
     # -------------------------------------------------------------------------
     # 球场关键点检测
@@ -39,8 +39,8 @@ court_detector:
     detector_type: inference
 
     # YOLO 关键点权重路径 (仅 detector_type=yolo)。
-    # scripts/train.py 训完会发布到此文件。
-    model_path: "models/pitch_keypoints.pt"
+    # 相对路径按仓库根目录解析；也可以写绝对路径。
+    model_path: "weights/pitch_keypoints.pt"
 
     # 固定机位标定 JSON (仅 detector_type=homography)。
     # 由 scripts/calibrate.py / calibrate_gui.py 生成。
@@ -84,7 +84,7 @@ court_detector:
     # -------------------------------------------------------------------------
 
     # 球员检测权重。scripts/train_players.py 训完发布到此文件。
-    player_model_path: "models/players.pt"
+    player_model_path: "weights/players.pt"
 
     # YOLO 检测置信度阈值。低于此分数的框直接丢掉。
     # 越小召回越高、误检越多；越大越干净、易漏检。常用 0.2~0.4。
@@ -106,20 +106,24 @@ court_detector:
     player_nms_contain: 0.7
 
     # -------------------------------------------------------------------------
-    # 球衣号码 OCR (GUI「号码识别」；EasyOCR 权重在 models/*.pth)
+    # 球衣号码 OCR (GUI「号码识别」)
+    # EasyOCR 权重在 weights/*.pth；PaddleOCR 权重在 weights/paddle_ocr/
     # -------------------------------------------------------------------------
 
-    # OCR 结果最低置信度。低于此值的数字串丢弃。
-    jersey_ocr_min_conf: 0.35
+    # OCR 结果最低置信度。球衣数字往往偏低，太高会全部被丢掉。
+    jersey_ocr_min_conf: 0.2
 
-    # 从球员框裁「胸前」区域时，左右各内缩的比例 (相对框宽)。
-    jersey_torso_x_margin: 0.18
+    # 号码模型: easyocr 或 paddle。界面上的下拉框会覆盖这项。
+    jersey_ocr_engine: easyocr
 
-    # 胸前区域上边界: 距框顶的比例 (相对框高)。
-    jersey_torso_y0: 0.10
+    # 上半身裁图左右内缩比例 (相对球员框宽)。保持 0，用整个人的宽度，避免裁到框外面。
+    jersey_torso_x_margin: 0.0
 
-    # 胸前区域下边界: 距框顶的比例 (相对框高)。号码通常在上半身。
-    jersey_torso_y1: 0.52
+    # 上半身上边界: 距球员框顶的比例。
+    jersey_torso_y0: 0.05
+
+    # 上半身下边界: 距球员框顶的比例。取头到腰，整段都在该球员检测框内。
+    jersey_torso_y1: 0.55
 
     # -------------------------------------------------------------------------
     # 点击特写 (GUI 点选球员框后的放大面板)

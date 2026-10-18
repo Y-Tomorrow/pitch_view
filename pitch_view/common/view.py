@@ -29,7 +29,13 @@ class ViewTransformer:
         source = source.astype(np.float32)
         target = target.astype(np.float32)
         self._image_shape = image_shape
-        self.m, _ = cv2.findHomography(source, target)
+        # RANSAC drops a point that disagrees with the others. The threshold is
+        # in target pixels, so scale it with the pitch drawing size.
+        span = float(np.ptp(target, axis=0).max()) if len(target) else 0.0
+        thresh = max(3.0, 0.015 * span)
+        self.m, _ = cv2.findHomography(source, target, cv2.RANSAC, thresh)
+        if self.m is None:
+            self.m, _ = cv2.findHomography(source, target)
         if self.m is None:
             raise ValueError("Homography matrix could not be calculated.")
         self.m = self.m / self.m[2, 2]

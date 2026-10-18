@@ -1,35 +1,42 @@
 """
-Canonical weight locations under ``<repo>/models`` for train + inference.
+Canonical weight locations under ``<repo>/weights`` for train + inference.
 
-Packaging: ship the whole ``models/`` directory.
+Packaging: ship the whole ``weights/`` directory.
 """
 import os
 import shutil
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-MODELS_DIR = os.path.join(_ROOT, "models")
+WEIGHTS_DIR = os.path.join(_ROOT, "weights")
 PITCH_KEYPOINTS_NAME = "pitch_keypoints.pt"
 PLAYERS_NAME = "players.pt"
 EASYOCR_DETECT_NAME = "craft_mlt_25k.pth"
 EASYOCR_RECOG_NAME = "english_g2.pth"
 
 
-def models_dir() -> str:
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    return MODELS_DIR
+def weights_dir() -> str:
+    os.makedirs(WEIGHTS_DIR, exist_ok=True)
+    return WEIGHTS_DIR
 
 
 def pitch_keypoints_path() -> str:
-    return os.path.join(models_dir(), PITCH_KEYPOINTS_NAME)
+    return os.path.join(weights_dir(), PITCH_KEYPOINTS_NAME)
 
 
 def players_path() -> str:
-    return os.path.join(models_dir(), PLAYERS_NAME)
+    return os.path.join(weights_dir(), PLAYERS_NAME)
+
+
+def paddle_ocr_dir() -> str:
+    """PaddleOCR weight cache. First use of the Paddle engine fills this."""
+    path = os.path.join(weights_dir(), "paddle_ocr")
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def publish_weight(src_best: str, dest_path: str) -> str:
-    """Copy a trained ``best.pt`` into ``models/`` under the packaged name."""
+    """Copy a trained ``best.pt`` into ``weights/`` under the packaged name."""
     if not src_best or not os.path.isfile(src_best):
         raise FileNotFoundError(f"Trained weight not found: {src_best!r}")
     os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
