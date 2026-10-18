@@ -1,6 +1,9 @@
 # 数据集（体积大，训练时用 scripts 从 Roboflow 重新下载）
 football-field-detection-14/
 football-players-detection-12/
+data/pitch_dataset/
+data/master.mp4
+data/video.mp4
 
 # ROS 2 / colcon 编译与安装产物
 build/
