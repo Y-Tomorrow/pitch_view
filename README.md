@@ -88,7 +88,7 @@ WSL2 上的 Gazebo Sim（`gz-sim8` / Harmonic）。球场线按 `SoccerPitchConf
 
 球员轨迹和长焦跟踪（原片 [`image/focus.mp4`](image/focus.mp4)）：
 
-<img src="image/focus.gif" width="100%" alt="球员轨迹和长焦跟踪">
+![球员轨迹和长焦跟踪](image/focus.gif)
 
 仿真里的人是色块，广播球员模型几乎认不出。`player_backend: auto` 时，只有 `gz://` 用红/蓝颜色检测，其它画面仍用 `weights/players.pt`。号码识别两条路径都还在，色块上的数字不稳定。
 
@@ -265,7 +265,7 @@ v8 对照起点是 `yolov8m-pose.pt`，YOLO26 起点是 `yolo26m-pose.pt`。都�
 
 点左图里的一名球员后，左图和俯视图都画他走过的线。再点空白处取消。号码只改标签，不参与「这是不是同一个人」。轨迹和长焦一起看：
 
-<img src="image/focus.gif" width="100%" alt="球员轨迹和长焦跟踪">
+![球员轨迹和长焦跟踪](image/focus.gif)
 
 相对上一版（只拿上一帧的框做重叠和距离）多了匀速外推，用来接短遮挡：
 
@@ -316,7 +316,7 @@ python3 scripts/annotate_keypoints.py
 
 `annotate_keypoints.py` 是 Qt 标定窗口。下面是标定球场关键点的过程（原片 [`image/annotate_keypoints.mp4`](image/annotate_keypoints.mp4)）：
 
-<img src="image/annotate_keypoints.gif" width="100%" alt="标定球场关键点">
+![标定球场关键点](image/annotate_keypoints.gif)
 
 | 区域 | 内容 |
 |------|------|
