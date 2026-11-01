@@ -86,9 +86,9 @@ WSL2 上的 Gazebo Sim（`gz-sim8` / Harmonic）。球场线按 `SoccerPitchConf
 
 广角和长焦坐在同一块平台上，没有立杆。长焦是两级：偏航电机（`tele_yaw`）只绕竖直轴转，俯仰电机和镜头（`tele_camera`）在叉架里再低头。话题 `/tele_camera`（960×540，水平视场约 18°）。控制不是关节电机指令，而是 Python 调用 `/world/soccer_pitch/set_pose`，按算好的偏航、俯仰写这两个模型的姿态。连上仿真相机后，长焦画面画在俯视图下面，不另开窗口。点中一名球员，并且俯视图已经有单应时，云台一直跟着他在场上的位置转，转角每拍有上限，所以不会一帧甩过去。长焦画面里同一个人的色块不在正中时，再小幅修正，把他拉回中心。色块要靠近上一帧那个人，避免被路过的人抢走。这一帧没看见人，修正慢慢收回，场上位置的跟随仍继续。取消选择后回到中圈。没有标定、单应失败时云台不知道该看谁，会停在中圈。
 
-球员轨迹和长焦跟踪：
+球员轨迹和长焦跟踪（原片 [`image/focus.mp4`](image/focus.mp4)）：
 
-<video src="image/focus.mp4" controls width="100%"></video>
+<img src="image/focus.gif" width="100%" alt="球员轨迹和长焦跟踪">
 
 仿真里的人是色块，广播球员模型几乎认不出。`player_backend: auto` 时，只有 `gz://` 用红/蓝颜色检测，其它画面仍用 `weights/players.pt`。号码识别两条路径都还在，色块上的数字不稳定。
 
@@ -265,7 +265,7 @@ v8 对照起点是 `yolov8m-pose.pt`，YOLO26 起点是 `yolo26m-pose.pt`。都�
 
 点左图里的一名球员后，左图和俯视图都画他走过的线。再点空白处取消。号码只改标签，不参与「这是不是同一个人」。轨迹和长焦一起看：
 
-<video src="image/focus.mp4" controls width="100%"></video>
+<img src="image/focus.gif" width="100%" alt="球员轨迹和长焦跟踪">
 
 相对上一版（只拿上一帧的框做重叠和距离）多了匀速外推，用来接短遮挡：
 
@@ -314,9 +314,9 @@ python3 scripts/annotate_keypoints.py
 
 `extract_pitch_frames.py` 顺序读视频，丢掉球员特写、看台和几乎重复的帧，只留能看到标线的画面。默认写到 `data/pitch_dataset/images/`，清单是 `manifest.csv`。
 
-`annotate_keypoints.py` 是 Qt 标定窗口。下面是标定球场关键点的过程：
+`annotate_keypoints.py` 是 Qt 标定窗口。下面是标定球场关键点的过程（原片 [`image/annotate_keypoints.mp4`](image/annotate_keypoints.mp4)）：
 
-<video src="image/annotate_keypoints.mp4" controls width="100%"></video>
+<img src="image/annotate_keypoints.gif" width="100%" alt="标定球场关键点">
 
 | 区域 | 内容 |
 |------|------|
