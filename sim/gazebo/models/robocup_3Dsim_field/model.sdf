@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <model name="robocup_3d_field">
+    <static>true</static>
+    <link name="field">
+      <pose>0 0 0.01 0 0 0</pose>
+      <collision name="collision">
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>18.0000 10.5000</size>
+          </plane>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.2</mu>
+              <mu2>1.2</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name="turf">
+        <pose>0 0 0.01 0 0 0</pose>
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <box><size>18.0000 10.5000 0.02</size></box>
+        </geometry>
+        <material>
+          <ambient>0.20 0.55 0.16 1</ambient>
+          <diffuse>0.20 0.55 0.16 1</diffuse>
+          <specular>0.02 0.04 0.02 1</specular>
+        </material>
+      </visual>
+      <visual name="lines">
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <mesh>
+            <uri>model://robocup_3Dsim_field/meshes/lines.obj</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.95 0.95 0.95 1</ambient>
+          <diffuse>0.95 0.95 0.95 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

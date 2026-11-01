@@ -30,6 +30,8 @@ _DEFAULTS: Dict[str, Any] = {
     "min_line_length": 100,
     "max_line_gap": 30,
     "player_model_path": "weights/players.pt",
+    # yolo: broadcast weights. sim: red/blue Gazebo figures.
+    "player_backend": "auto",
     "player_conf": 0.25,
     "player_iou": 0.45,
     "player_agnostic_nms": True,

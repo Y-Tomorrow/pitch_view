@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <model name="sim_blue_11">
+    <static>false</static>
+    <pose>-0.600 -1.600 0.03 0 0 1.5708</pose>
+    <link name="body">
+      <kinematic>true</kinematic>
+      <gravity>false</gravity>
+      <inertial>
+        <mass>1</mass>
+        <inertia>
+          <ixx>0.1</ixx><iyy>0.1</iyy><izz>0.1</izz>
+        </inertia>
+      </inertial>
+      <collision name="body">
+        <pose>0 0 0.6 0 0 0</pose>
+        <geometry><box><size>0.3 0.4 1.2</size></box></geometry>
+      </collision>
+      <visual name="blue_11_leg_l"><pose>0.0000 0.0700 0.2800 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.09 0.09 0.52</size></box></geometry><material><ambient>0.066 0.154 0.396 1</ambient><diffuse>0.066 0.154 0.396 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_leg_r"><pose>0.0000 -0.0700 0.2800 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.09 0.09 0.52</size></box></geometry><material><ambient>0.066 0.154 0.396 1</ambient><diffuse>0.066 0.154 0.396 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_torso"><pose>0.0000 0.0000 0.7800 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.18 0.34 0.42</size></box></geometry><material><ambient>0.120 0.280 0.720 1</ambient><diffuse>0.120 0.280 0.720 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_arm_l"><pose>0.0000 0.2400 0.7800 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.08 0.08 0.36</size></box></geometry><material><ambient>0.120 0.280 0.720 1</ambient><diffuse>0.120 0.280 0.720 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_arm_r"><pose>0.0000 -0.2400 0.7800 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.08 0.08 0.36</size></box></geometry><material><ambient>0.120 0.280 0.720 1</ambient><diffuse>0.120 0.280 0.720 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_head"><pose>0.0000 0.0000 1.1200 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><sphere><radius>0.11</radius></sphere></geometry><material><ambient>0.860 0.720 0.580 1</ambient><diffuse>0.860 0.720 0.580 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_f0_b"><pose>0.1000 0.1000 0.8400 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_f0_c"><pose>0.1000 0.1000 0.7600 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_f1_b"><pose>0.1000 -0.0100 0.8400 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_f1_c"><pose>0.1000 -0.0100 0.7600 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_b0_b"><pose>-0.1000 -0.1000 0.8400 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_b0_c"><pose>-0.1000 -0.1000 0.7600 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_b1_b"><pose>-0.1000 0.0100 0.8400 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+      <visual name="blue_11_b1_c"><pose>-0.1000 0.0100 0.7600 0 0 0.0000</pose><cast_shadows>false</cast_shadows><geometry><box><size>0.0080 0.0160 0.0800</size></box></geometry><material><ambient>0.960 0.960 0.960 1</ambient><diffuse>0.960 0.960 0.960 1</diffuse><specular>0.04 0.04 0.04 1</specular></material></visual>
+    </link>
+  </model>
+</sdf>

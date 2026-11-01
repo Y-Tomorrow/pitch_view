@@ -83,7 +83,11 @@ court_detector:
     # 球员 / 球 / 裁判检测 (GUI「球员推理」；权重见 player_model_path)
     # -------------------------------------------------------------------------
 
-    # 球员检测权重。scripts/train_players.py 训完发布到此文件。
+    # 球员检测方式。auto：仅 gz:// 仿真相机用颜色，其余用 YOLO。
+    # 也可写成 yolo 或 sim 强制一种。
+    player_backend: "auto"
+
+    # 球员检测权重。scripts/train_players.py 训完发布到此文件。仅 yolo 使用。
     player_model_path: "weights/players.pt"
 
     # YOLO 检测置信度阈值。低于此分数的框直接丢掉。

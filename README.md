@@ -1,4 +1,4 @@
-# pitch_view
+ ++# pitch_view
 
 把足球场从摄像机画面映射成 **俯视二维球场图**，并可叠加 **球员 / 门将 / 裁判 / 球** 检测、**球衣号码 OCR** 与点击特写。
 
@@ -15,12 +15,14 @@
 | 固定机位 | 标定 ≥4 点保存 JSON，之后每帧用同一套单应 |
 | 转播 / 多机位 | YOLO26m-pose 或 Roboflow 关键点模型，逐帧估 H |
 | 球员落位 | 「球员推理」：检测框底中点（球用中心）投到俯视图 |
+| 选中轨迹 | 点一名球员：按框的位置跟踪，短遮挡用匀速外推接上，左图和俯视图画路径 |
 | 球衣号码 | 「号码识别」：胸前裁剪后用 EasyOCR 或 PaddleOCR 认 1～2 位数字 |
 | 点击特写 | 点原图检测框 → 放大裁剪，并重写类别 / 置信度 / 号码 |
 | 自采关键点 | 从转播抽帧，用 `annotate_keypoints.py` 标 32 点，再和公开集一起微调 |
 | 无 ROS | `python3 scripts/run_pitch_view.py`，左原图、右俯视图 |
 | 有 ROS2 | `court_detector` 订阅图像，发布标注图、俯视图、关键点 |
 | 打包部署 | 带走整个 `weights/` + `config/court_detector.yaml` |
+| Gazebo 仿真 | `sim/gazebo/launch_pitch.sh` 起 18 m×10.5 m 球场和固定相机，推理窗口用「仿真相机」读实时画面 |
 
 ---
 
@@ -57,7 +59,42 @@ python3 scripts/annotate_keypoints.py
 4. **号码识别** → 对已检出球员做 OCR（首次需本地 EasyOCR 权重）  
 5. **点击检测框** → 右上角特写 + 推理信息面板  
 
+<img src="image/image1.png" width="100%" alt="转播画面上的关键点和右侧俯视图">
+
 更多命令见 [docs/usage.md](docs/usage.md)。
+
+---
+
+## Gazebo 仿真
+
+WSL2 上的 Gazebo Sim（`gz-sim8` / Harmonic）。球场线按 `SoccerPitchConfiguration` 的比例缩到 **18 m × 10.5 m**（模板 120 m × 70 m 的 0.15 倍），原点在中圈。绿色只铺在球场内，白线是几何体，不是贴图。没有球门。
+
+```bash
+./sim/gazebo/launch_pitch.sh
+```
+
+脚本会：
+
+- 把 OpenGL 指到 NVIDIA（`GALLIUM_DRIVER=d3d12`，`MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`），避免 WSLg 默认用到核显
+- 生成 11 名带号码的方块球员，朝向固定，背部号码朝边线相机
+- 后台平滑走动：每人保持一个朝向和大约 0.7–1.5 m/s 的速度，拐弯有角速度上限。靠近某一条边就朝场内转，同时贴到两条边时朝对角线内侧走，不会堆在角上。推理窗口里的「球员运动」写 `sim/gazebo/player_motion_enabled`，`0` 就停。关掉 `launch_pitch.sh` 时会一并停掉走动进程和 Gazebo 的服务端、窗口
+- `gz sim -r` 直接开跑。暂停时相机会有话题但没有画面
+
+<img src="image/cameras.png" width="100%" alt="平台上的广角相机和长焦云台">
+
+固定广角相机话题是 `/pitch_camera`（1280×720，水平视场约 72°）。推理窗口点「仿真相机」订阅 `gz://pitch_camera`。左图是传感器原图，检测框叠在上面，不拿上一帧推理结果盖住实时画面。
+
+广角和长焦坐在同一块平台上，没有立杆。长焦是两级：偏航电机（`tele_yaw`）只绕竖直轴转，俯仰电机和镜头（`tele_camera`）在叉架里再低头。话题 `/tele_camera`（960×540，水平视场约 18°）。控制不是关节电机指令，而是 Python 调用 `/world/soccer_pitch/set_pose`，按算好的偏航、俯仰写这两个模型的姿态。连上仿真相机后，长焦画面画在俯视图下面，不另开窗口。点中一名球员，并且俯视图已经有单应时，云台一直跟着他在场上的位置转，转角每拍有上限，所以不会一帧甩过去。长焦画面里同一个人的色块不在正中时，再小幅修正，把他拉回中心。色块要靠近上一帧那个人，避免被路过的人抢走。这一帧没看见人，修正慢慢收回，场上位置的跟随仍继续。取消选择后回到中圈。没有标定、单应失败时云台不知道该看谁，会停在中圈。
+
+球员轨迹和长焦跟踪：
+
+<video src="image/focus.mp4" controls width="100%"></video>
+
+仿真里的人是色块，广播球员模型几乎认不出。`player_backend: auto` 时，只有 `gz://` 用红/蓝颜色检测，其它画面仍用 `weights/players.pt`。号码识别两条路径都还在，色块上的数字不稳定。
+
+这套球场和旧的 `data/image.png`、`data/image_calibration.json` 不是同一个场地，那张标定不能拿来映射仿真画面。要对仿真做俯视，得对当前相机重新标定点。
+
+相关文件：`sim/gazebo/worlds/soccer_pitch.sdf`、`gen_pitch_lines.py`、`gen_players.py`、`wander_players.py`。
 
 ---
 
@@ -145,6 +182,8 @@ python3 scripts/run_pitch_view.py --config /path/to/custom.yaml
 - `vertices` 顺序必须与模型输出一致，否则单应错乱  
 - 语义表见 [docs/annotation.md](docs/annotation.md)
 
+<img src="image/football_pitch.webp" width="100%" alt="120 m × 70 m 球场模板">
+
 `scale`：俯视图每厘米多少像素，默认读 YAML（通常 `0.05`）。
 
 篮球：`BasketballCourtConfiguration` + `annotators/basketball.py`，同一套 `ViewTransformer`。
@@ -190,11 +229,15 @@ v8 对照起点是 `yolov8m-pose.pt`，YOLO26 起点是 `yolo26m-pose.pt`。都�
 
 播放时左图和俯视图一起更新：当前帧推理结束后才解码下一帧，所以两边同步，帧率由模型决定。
 
+<img src="image/image2.png" width="100%" alt="关键点连成线并投到俯视图">
+
 ### 球员检测
 
 用的是 **YOLOv8m detect**（`yolov8m.pt` 训 100 epoch）→ `weights/players.pt`。类别 `ball` / `GK` / `player` / `ref`。公开验证集 precision **0.935**、recall **0.832**、mAP50 **0.861**、mAP50-95 **0.592**。
 
 框能检出来，落点仍靠球场单应：人用框底中点，球用框中心。同一人会同时出 `player` 和 `GK`，所以做了跨类 NMS。当时用旧关键点权重看本场，有的画面能检出大约 9～11 个球员框，但关键点仍是 0，俯视图贴不上去。
+
+<img src="image/image3.png" width="100%" alt="转播画面上的球员框和俯视图落点">
 
 ### 球衣号码
 
@@ -205,6 +248,8 @@ v8 对照起点是 `yolov8m-pose.pt`，YOLO26 起点是 `yolo26m-pose.pt`。都�
 | EasyOCR `english_g2` | 安装路径短，有数字白名单 | 通用英文模型，小字、彩色球衣、低对比容易碎 | 明显的号码也经常认不出 |
 | PaddleOCR：检测 `PP-OCRv5_mobile_det`，识别 `en_PP-OCRv4_mobile_rec` | 同一批画面上比 EasyOCR 稳。先看彩色再试反色；拆开的相邻数字会合并；检测不够有把握时整图再认一次 | 手机版英文模型，不是球衣专用。CPU 版 Paddle 会慢 | 比 EasyOCR 好一截，清楚的号码仍会漏或错。这条路径改完后没有再统计整场准确率 |
 
+<img src="image/image4.png" width="100%" alt="点击球员后的特写和号码识别过程">
+
 ---
 
 ## 球员 · 号码 · 特写
@@ -212,7 +257,27 @@ v8 对照起点是 `yolov8m-pose.pt`，YOLO26 起点是 `yolo26m-pose.pt`。都�
 - **球员模型类别**：`ball` / `GK` / `player` / `ref`  
 - **置信度等**：`player_conf`（默认 0.25）、`player_iou`、跨类 NMS 等见 YAML  
 - **号码**：未开启 / 未能识别 / `#号` 三种文案分开显示，避免和「球员未检出」混淆  
-- **特写**：点检测框放大；视频流中按 IoU 跟踪同一框  
+- **特写**：点检测框放大；选中后按下面的轨迹跟踪同一人，而不只按号码
+
+<img src="image/image5.png" width="100%" alt="仿真相机里的球员框、特写和俯视图">
+
+### 选中球员的轨迹
+
+点左图里的一名球员后，左图和俯视图都画他走过的线。再点空白处取消。号码只改标签，不参与「这是不是同一个人」。轨迹和长焦一起看：
+
+<video src="image/focus.mp4" controls width="100%"></video>
+
+相对上一版（只拿上一帧的框做重叠和距离）多了匀速外推，用来接短遮挡：
+
+| | 上一版 | 现在 |
+|---|---|---|
+| 认人 | 检测框重叠优先，中心距离辅助。重叠 &lt; 0.12 且相距 &gt; 100 像素就不接 | 和预测位置比，距离近的优先。球衣颜色差一截就不当成同一个人。旁边重叠过来、但中心离预测较远的人接不上 |
+| 预测 | 无。人被挡住后停在最后看见的位置 | 用上一档位移当速度，挡住期间按这个速度把框往前推。搜索范围随速度加宽，最远约 220 像素 |
+| 轨迹点 | 每次跟上记一个脚点（框底中点），俯视图再经单应投到球场 | 仍只记真正检测到的脚点，不把预测点画进线里。最多 240 个点 |
+| 遮挡 | 人走远后再出现会被当成新人，线断开 | 大约十几次推理内沿原方向出现，接回同一条线。更久、或急停变向，仍丢掉 |
+| 滤波 | 无 | 无卡尔曼。跟上之后位置直接用新的检测，不和预测加权 |
+
+拖动进度条会清空轨迹。两个人贴在一起时，框仍可能短暂跟错。
 
 ---
 
@@ -249,7 +314,9 @@ python3 scripts/annotate_keypoints.py
 
 `extract_pitch_frames.py` 顺序读视频，丢掉球员特写、看台和几乎重复的帧，只留能看到标线的画面。默认写到 `data/pitch_dataset/images/`，清单是 `manifest.csv`。
 
-`annotate_keypoints.py` 是 Qt 标定窗口：
+`annotate_keypoints.py` 是 Qt 标定窗口。下面是标定球场关键点的过程：
+
+<video src="image/annotate_keypoints.mp4" controls width="100%"></video>
 
 | 区域 | 内容 |
 |------|------|

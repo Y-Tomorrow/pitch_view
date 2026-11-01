@@ -25,6 +25,7 @@ Usage:
         --model weights/pitch_keypoints.pt data/1.png
 """
 import argparse
+import json
 import multiprocessing as mp
 import os
 import sys
@@ -45,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2
 import numpy as np
 
-from pitch_view.annotators.soccer import annotate_keypoints, compose_topdown
+from pitch_view.annotators.soccer import annotate_keypoints, compose_topdown, draw_pitch
 from pitch_view.common import ViewTransformer, create_detector
 from pitch_view.common.settings import (
     default_config_path,
@@ -92,12 +93,14 @@ def _fix_qt_plugin_path():
 
 _fix_qt_plugin_path()
 
-from PyQt5.QtCore import Qt, QTimer, QRect, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter, QPixmap
+from PyQt5.QtCore import Qt, QTimer, QRect, QPointF, pyqtSignal
+from PyQt5.QtGui import (
+    QColor, QFont, QFontDatabase, QImage, QPainter, QPen, QPixmap,
+)
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QPushButton, QSlider, QSplitter, QVBoxLayout,
-    QWidget,
+    QLineEdit, QMainWindow, QMessageBox, QPushButton, QSlider, QSplitter,
+    QVBoxLayout, QWidget,
 )
 
 
@@ -286,36 +289,46 @@ def _default_player_model():
 
 
 def _player_worker(model_path, device, conn, conf, iou, agnostic_nms,
-                   nms_iou, nms_contain):
-    """YOLO detect worker in a spawn-ed process (keep torch out of Qt)."""
+                   nms_iou, nms_contain, backend):
+    """Detect worker in a spawn-ed process (keep torch out of Qt)."""
     try:
         os.environ["OMP_NUM_THREADS"] = "1"
         os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
         os.environ["MKL_NUM_THREADS"] = "1"
-        from ultralytics import YOLO
-
-        print("[player-worker] loading model…", file=sys.stderr, flush=True)
-        from pitch_view.common.detector import _cuda_or_cpu
-        device, half = _cuda_or_cpu(device)
-        model = YOLO(model_path).to(device)
-        print(f"[player-worker] model loaded on {device}"
-              f"{' fp16' if half else ''}, ready.",
-              file=sys.stderr, flush=True)
+        sim = str(backend).lower() == "sim"
+        model = None
+        half = False
+        if sim:
+            from pitch_view.common.sim_players import detect_sim_players
+            print("[player-worker] sim colour detector ready.",
+                  file=sys.stderr, flush=True)
+        else:
+            from ultralytics import YOLO
+            print("[player-worker] loading model…", file=sys.stderr, flush=True)
+            from pitch_view.common.detector import _cuda_or_cpu
+            device, half = _cuda_or_cpu(device)
+            model = YOLO(model_path).to(device)
+            print(f"[player-worker] model loaded on {device}"
+                  f"{' fp16' if half else ''}, ready.",
+                  file=sys.stderr, flush=True)
         while True:
             frame = conn.recv()
             if frame is None:
                 break
-            result = model(
-                frame, verbose=False, conf=conf, iou=iou,
-                agnostic_nms=agnostic_nms, device=device, imgsz=640,
-                **({"quantize": 16} if half else {}))[0]
-            boxes = []
-            if result.boxes is not None and len(result.boxes) > 0:
-                xyxy = result.boxes.xyxy.cpu().numpy().astype(np.float32)
-                cls = result.boxes.cls.cpu().numpy().astype(np.int32)
-                scores = result.boxes.conf.cpu().numpy().astype(np.float32)
-                for i in range(len(xyxy)):
-                    boxes.append((int(cls[i]), float(scores[i]), xyxy[i]))
+            if sim:
+                boxes = detect_sim_players(frame)
+            else:
+                result = model(
+                    frame, verbose=False, conf=conf, iou=iou,
+                    agnostic_nms=agnostic_nms, device=device, imgsz=640,
+                    **({"quantize": 16} if half else {}))[0]
+                boxes = []
+                if result.boxes is not None and len(result.boxes) > 0:
+                    xyxy = result.boxes.xyxy.cpu().numpy().astype(np.float32)
+                    cls = result.boxes.cls.cpu().numpy().astype(np.int32)
+                    scores = result.boxes.conf.cpu().numpy().astype(np.float32)
+                    for i in range(len(xyxy)):
+                        boxes.append((int(cls[i]), float(scores[i]), xyxy[i]))
             boxes = _dedupe_player_boxes(boxes, nms_iou, nms_contain)
             conn.send((True, boxes))
     except Exception as exc:  # noqa: BLE001
@@ -327,19 +340,22 @@ def _player_worker(model_path, device, conn, conf, iou, agnostic_nms,
 
 
 class SubprocessPlayerDetector:
-    def __init__(self, model_path, device, settings=None):
+    def __init__(self, model_path, device, settings=None, backend=None):
         s = settings or SETTINGS
         conf = float(s.get("player_conf", 0.25))
         iou = float(s.get("player_iou", 0.45))
         agnostic = bool(s.get("player_agnostic_nms", True))
         nms_iou = float(s.get("player_nms_iou", 0.45))
         nms_contain = float(s.get("player_nms_contain", 0.7))
+        backend = backend or str(s.get("player_backend", "auto"))
+        if str(backend).lower() == "auto":
+            backend = "yolo"
         ctx = mp.get_context("spawn")
         self._parent, child = ctx.Pipe()
         self._proc = ctx.Process(
             target=_player_worker,
             args=(model_path, device, child, conf, iou, agnostic,
-                  nms_iou, nms_contain),
+                  nms_iou, nms_contain, backend),
             daemon=True,
         )
         self._proc.start()
@@ -366,6 +382,26 @@ def _split_box(item):
     cls, conf, xyxy = item[0], item[1], item[2]
     number = item[3] if len(item) >= 4 else ""
     return int(cls), float(conf), xyxy, (number or "")
+
+
+def _reuse_numbers(players, cached, max_dist=80.0):
+    """Keep jersey numbers from the last OCR when the player barely moved."""
+    out = []
+    for item in players:
+        cls, conf, xyxy, _number = _split_box(item)
+        cx = (float(xyxy[0]) + float(xyxy[2])) * 0.5
+        cy = (float(xyxy[1]) + float(xyxy[3])) * 0.5
+        best, best_d = "", max_dist
+        for old_xy, old_num in cached:
+            if not old_num:
+                continue
+            ox = (float(old_xy[0]) + float(old_xy[2])) * 0.5
+            oy = (float(old_xy[1]) + float(old_xy[3])) * 0.5
+            dist = ((cx - ox) ** 2 + (cy - oy) ** 2) ** 0.5
+            if dist < best_d:
+                best, best_d = old_num, dist
+        out.append((cls, conf, xyxy, best))
+    return out
 
 
 def _torso_kwargs(settings=None):
@@ -955,6 +991,7 @@ def _jersey_worker(device, conn, settings=None):
         print(f"[jersey-ocr] engine: {engine}", file=sys.stderr, flush=True)
         reader = _make_digit_reader(device, engine)
         print("[jersey-ocr] ready.", file=sys.stderr, flush=True)
+        conn.send(("ready", None))
         while True:
             msg = conn.recv()
             if msg is None:
@@ -974,11 +1011,11 @@ def _jersey_worker(device, conn, settings=None):
             n_hit = sum(1 for b in out if b[3])
             print(f"[jersey-ocr] {n_hit}/{len(out)} numbers",
                   file=sys.stderr, flush=True)
-            conn.send((True, out))
+            conn.send(("ok", out))
     except Exception as exc:  # noqa: BLE001
         print(f"[jersey-ocr] error: {exc}", file=sys.stderr, flush=True)
         try:
-            conn.send((False, str(exc)))
+            conn.send(("err", str(exc)))
         except Exception:
             pass
 
@@ -993,22 +1030,40 @@ class SubprocessJerseyOcr:
             daemon=True)
         self._proc.start()
         child.close()
+        self.ready = False
+        self.busy = False
+        self.last = None
+        self.error = None
 
-    def recognize(self, frame, boxes):
-        if not boxes:
-            return []
-        if self._parent.poll():
-            ok, payload = self._parent.recv()
-            if not ok:
-                raise RuntimeError(payload)
+    def pump(self):
+        """Take whatever the OCR process has finished. Never waits."""
+        try:
+            while self._parent.poll():
+                kind, payload = self._parent.recv()
+                if kind == "ready":
+                    self.ready = True
+                elif kind == "err":
+                    self.error = payload
+                    self.busy = False
+                elif kind == "ok":
+                    self.last = payload
+                    self.busy = False
+        except (EOFError, BrokenPipeError, OSError) as exc:
+            self.error = f"号码识别进程中断: {exc}"
+            self.busy = False
+
+    def submit(self, frame, boxes):
+        """Queue one frame. Returns False while the model is still loading or busy."""
+        self.pump()
+        if self.error or not self.ready or self.busy or not boxes:
+            return False
         try:
             self._parent.send((frame, boxes))
-            ok, payload = self._parent.recv()
         except (EOFError, BrokenPipeError, OSError) as exc:
-            raise RuntimeError(f"号码识别进程中断: {exc}") from exc
-        if not ok:
-            raise RuntimeError(payload)
-        return payload
+            self.error = f"号码识别进程中断: {exc}"
+            return False
+        self.busy = True
+        return True
 
     def close(self):
         try:
@@ -1123,14 +1178,29 @@ def _render_views(frame, keypoints, target, config, scale, players=None):
     return annotated, topdown
 
 
+def _open_capture(src):
+    """Open a file, camera index, URL, or ``gz://pitch_camera``."""
+    if isinstance(src, str) and src.startswith("gz://"):
+        from pitch_view.common.gz_camera import open_gz_source
+        cap = open_gz_source(src)
+        if not cap.isOpened():
+            return None
+        return cap
+    cap = cv2.VideoCapture(src)
+    if not cap.isOpened():
+        cap.release()
+        return None
+    return cap
+
+
 def _run_cli(args):
     source = args.video or args.source
     if not source:
         raise SystemExit("--cli 需要图片路径或 --video <path>。")
     config = SoccerPitchConfiguration()
     detector = _build_detector(args, config)
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
+    cap = _open_capture(source)
+    if cap is None:
         raise SystemExit(f"Could not open source {source!r}.")
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
@@ -1526,8 +1596,14 @@ class DisplayCanvas(QWidget):
         self._scale = 1.0
         self._off_x = 0.0
         self._off_y = 0.0
+        self._marks = []
         self.setMinimumSize(320, 240)
         self.setMouseTracking(True)
+
+    def set_marks(self, points):
+        """Image-coordinate points drawn on top of the frame."""
+        self._marks = list(points)
+        self.update()
 
     def set_image(self, frame_bgr):
         if frame_bgr is None:
@@ -1587,13 +1663,36 @@ class DisplayCanvas(QWidget):
                        int(self._orig_w * self._scale),
                        int(self._orig_h * self._scale))
         painter.drawPixmap(target, self._pixmap, self._pixmap.rect())
+        for i, (ox, oy) in enumerate(self._marks):
+            dx = self._off_x + ox * self._scale
+            dy = self._off_y + oy * self._scale
+            painter.setPen(QPen(QColor(255, 220, 60), 2))
+            painter.setBrush(QColor(220, 40, 40))
+            painter.drawEllipse(QPointF(dx, dy), 6, 6)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(QPointF(dx + 8, dy - 6), str(i))
 
 
 class InferenceWindow(QMainWindow):
+    gz_ready = pyqtSignal(object)
+    tele_frame = pyqtSignal(object)
+
     def __init__(self, config, scale=0.1, device="cpu", min_confidence=0.0,
                  detector="homography", calibration="", model="", api_key="",
                  settings=None):
         super().__init__()
+        self.gz_ready.connect(self._on_gz_ready)
+        self.tele_frame.connect(self._show_tele_frame)
+        self._gimbal_stop = None
+        self._gimbal_thread = None
+        self._tele_cap = None
+        self._tele_thread = None
+        self._gimbal_lock = threading.Lock()
+        self._gimbal_target = None
+        self._gimbal_track = None
+        self._tele_frame = None
+        self._tele_seq = 0
+        self._tele_seen = 0
         self.settings = dict(settings or SETTINGS)
         self.config = config
         self.scale = scale
@@ -1609,8 +1708,13 @@ class InferenceWindow(QMainWindow):
         self._last_target = None
         self._last_players = None
         self._last_annotated = None
+        self._last_topdown = None
         self._selected_xyxy = None
         self._selected_item = None
+        self._selected_track = None
+        self._tracks = {}
+        self._track_ids = []
+        self._next_track = 1
         self.cap = None
         self.timer = None
         self.paused = False
@@ -1620,6 +1724,7 @@ class InferenceWindow(QMainWindow):
         self._scrubbing = False
         self._frame_consumed = True
         self._infer_epoch = 0
+        self._reload_detector = False
         self._pending_frame = None
         self._reader_stop = None
         self._reader_thread = None
@@ -1633,6 +1738,21 @@ class InferenceWindow(QMainWindow):
         self._infer_thread = None
         self._infer_result = None
         self._first_infer_done = False
+        self._calibrating = False
+        self._calib_src = []
+        self._calib_map = []
+        self._calib_frame = None
+        self._calib_padding = 50
+        self._calib_scale = 0.08
+        self._shown_raw = None
+        self._source_path = ""
+        self._follow_live = False
+        self._painted_players = None
+        self._cached_kpts = None
+        self._cached_target = None
+        self._cached_h_time = 0.0
+        self._cached_numbers = []
+        self._cached_ocr_time = 0.0
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_infer)
         self._build_ui()
@@ -1659,9 +1779,19 @@ class InferenceWindow(QMainWindow):
         self.closeup.dismissed.connect(self._clear_closeup)
         self.canvas_src.clicked_image.connect(self._on_src_click)
         self.canvas_src.clicked_empty.connect(self._clear_closeup)
+        self.canvas_map.clicked_image.connect(self._on_map_click)
 
-        left = self._panel("原图 · 点击球员看特写", self.canvas_src)
-        right = self._panel("俯视图 · 球场线叠加", self.canvas_map)
+        left, self.lbl_src = self._panel("原图 · 点击球员看特写", self.canvas_src)
+        self.canvas_tele = DisplayCanvas()
+        self.canvas_tele.setMinimumSize(160, 120)
+        map_box, self.lbl_map = self._panel("俯视图 · 球场线叠加", self.canvas_map)
+        tele_box, self.lbl_tele = self._panel("长焦云台", self.canvas_tele)
+        right = QWidget()
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(6)
+        right_lay.addWidget(map_box, 3)
+        right_lay.addWidget(tele_box, 2)
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(left)
         splitter.addWidget(right)
@@ -1707,9 +1837,28 @@ class InferenceWindow(QMainWindow):
         self.btn_file.clicked.connect(self._open_file)
         self.btn_cam = QPushButton("打开相机")
         self.btn_cam.clicked.connect(self._open_camera)
+        self.btn_gz = QPushButton("仿真相机")
+        self.btn_gz.setToolTip("读取 Gazebo 话题 /pitch_camera，需先启动 ./sim/gazebo/launch_pitch.sh")
+        self.btn_gz.clicked.connect(self._open_gazebo)
+        self.btn_motion = QPushButton("球员运动")
+        self.btn_motion.setCheckable(True)
+        self.btn_motion.setChecked(self._player_motion_enabled())
+        self.btn_motion.setToolTip("开关 Gazebo 里球员的随机平移")
+        self.btn_motion.toggled.connect(self._toggle_player_motion)
         self.btn_pause = QPushButton("暂停")
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.btn_pause.setEnabled(False)
+        self.btn_calib = QPushButton("标定")
+        self.btn_calib.setCheckable(True)
+        self.btn_calib.clicked.connect(self._toggle_calib)
+        self.btn_calib.setToolTip(
+            "暂停当前帧，在左图和右图球场模板上按同一顺序各点至少 4 个点")
+        self.btn_calib_save = QPushButton("保存标定")
+        self.btn_calib_save.clicked.connect(self._save_calib)
+        self.btn_calib_save.setEnabled(False)
+        self.btn_calib_undo = QPushButton("撤销点")
+        self.btn_calib_undo.clicked.connect(self._undo_calib_point)
+        self.btn_calib_undo.setEnabled(False)
 
         self.edit_rtsp = QLineEdit()
         self.edit_rtsp.setPlaceholderText("RTSP / 视频 URL")
@@ -1719,9 +1868,14 @@ class InferenceWindow(QMainWindow):
         src_row = QHBoxLayout()
         src_row.addWidget(self.btn_file)
         src_row.addWidget(self.btn_cam)
+        src_row.addWidget(self.btn_gz)
+        src_row.addWidget(self.btn_motion)
         src_row.addWidget(self.edit_rtsp)
         src_row.addWidget(self.btn_rtsp)
         src_row.addWidget(self.btn_pause)
+        src_row.addWidget(self.btn_calib)
+        src_row.addWidget(self.btn_calib_save)
+        src_row.addWidget(self.btn_calib_undo)
         src_row.addStretch(1)
 
         self.edit_player = QLineEdit()
@@ -1850,7 +2004,7 @@ class InferenceWindow(QMainWindow):
         canvas.setStyleSheet(
             "border: 1px solid #3a3d44; border-radius: 4px;")
         v.addWidget(canvas, 1)
-        return box
+        return box, lbl
 
     # -- detector ----------------------------------------------------------- #
     def _set_method(self, kind):
@@ -1887,8 +2041,8 @@ class InferenceWindow(QMainWindow):
         api_key = self.edit_apikey.text().strip() \
             or os.environ.get("ROBOFLOW_API_KEY", "")
         if method == "homography" and not value:
-            self.status.setText("请先选择标定 JSON 文件。")
-            return False
+            self._close_detector()
+            return True
         if method == "yolo" and not value:
             self.status.setText("请先选择模型 .pt 文件。")
             return False
@@ -1940,17 +2094,49 @@ class InferenceWindow(QMainWindow):
             return
         if path:
             self.edit_model.setText(path)
+            self._apply_model_path()
+
+    def _apply_model_path(self):
+        """Reload the detector from the path box and run it on the open frame."""
+        if self.cap is None and self._last_frame is None:
+            self.status.setText("已记下标定文件。打开画面后会用它做俯视。")
+            return
+        self._infer_epoch += 1
+        self._cached_kpts = None
+        self._cached_target = None
+        self._cached_h_time = 0.0
+        self._reload_detector = True
+        if not self._build_detector():
+            self._reload_detector = False
+            return
+        self.status.setText(f"已载入标定: {self.edit_model.text().strip()}")
+        self._submitted_i = -1
+        if self._last_frame is not None:
+            self._process_frame(self._last_frame, self._shown_i)
+        if self._infer_thread is None or not self._infer_thread.is_alive():
+            self._reload_detector = False
 
     # -- source ------------------------------------------------------------- #
-    def _start_source(self, src):
-        if not self._build_detector():
+    def _start_source(self, src, cap=None):
+        if cap is None and not self._build_detector():
             return
         self._stop_source()
-        cap = cv2.VideoCapture(src)
-        if not cap.isOpened():
+        if cap is None:
+            cap = _open_capture(src)
+        if cap is None:
             self.status.setText(f"无法打开输入源 {src!r}")
             return
         self.cap = cap
+        self._source_path = src if isinstance(src, str) else ""
+        self._follow_live = self._source_path.startswith("gz://")
+        self._cached_kpts = None
+        self._cached_target = None
+        self._cached_h_time = 0.0
+        self._cached_numbers = []
+        self._cached_ocr_time = 0.0
+        self._tracks = {}
+        self._next_track = 1
+        self._selected_track = None
         self.paused = False
         self._first_infer_done = False
         self.btn_pause.setEnabled(True)
@@ -1994,6 +2180,7 @@ class InferenceWindow(QMainWindow):
                 self.status.setText("读不到帧。")
                 return
             self._set_paused(True)
+            self._shown_raw = np.ascontiguousarray(frame)
             self.canvas_src.set_image(frame)
             self._shown_i = 0
         else:
@@ -2005,29 +2192,37 @@ class InferenceWindow(QMainWindow):
             self.timer.timeout.connect(self._present_live)
             self.timer.start(15)
             self._set_paused(False)
+            if self._follow_live:
+                self._start_tele()
 
-        if getattr(self, "_auto_players", False) and self._start_player():
+        if self.player_on:
+            self._start_player()
+        elif getattr(self, "_auto_players", False) and self._start_player():
             self.btn_player.setChecked(True)
             self.btn_player.setText("关闭球员推理")
+        if self.detector_obj is None:
+            self.status.setText("已打开画面。点「标定」，在左右两图按同一顺序各点至少 4 个点。")
+            return
         self.status.setText("正在加载模型 / 推理(首次需 10~60 秒,请稍候)…")
         QApplication.processEvents()
         if is_image:
             self._process_frame(frame, 0)
 
     def _stop_source(self):
+        self._stop_tele()
         if self._reader_stop is not None:
             self._reader_stop.set()
+        with self._cap_lock:
+            if self.cap is not None:
+                self.cap.release()
+                self.cap = None
         if self._reader_thread is not None:
-            self._reader_thread.join(timeout=2.0)
+            self._reader_thread.join(timeout=0.5)
             self._reader_thread = None
         self._reader_stop = None
         if self.timer is not None:
             self.timer.stop()
             self.timer = None
-        with self._cap_lock:
-            if self.cap is not None:
-                self.cap.release()
-                self.cap = None
         self._infer_epoch += 1
         self._frame_count = 0
         self._frame_i = 0
@@ -2081,6 +2276,11 @@ class InferenceWindow(QMainWindow):
             return
         index = max(0, min(int(index), self._frame_count - 1))
         self._infer_epoch += 1
+        self._tracks = {}
+        self._next_track = 1
+        self._selected_track = None
+        self._selected_item = None
+        self._selected_xyxy = None
         self._submitted_i = -1
         with self._latest_lock:
             self._seek_req = index
@@ -2111,7 +2311,8 @@ class InferenceWindow(QMainWindow):
                     self._frame_consumed = False
                 next_t = time.perf_counter()
                 continue
-            if self.paused or self._scrubbing or not self._frame_consumed:
+            if self.paused or self._scrubbing or (
+                    not getattr(self, "_follow_live", False) and not self._frame_consumed):
                 if self._reader_stop.wait(0.01):
                     return
                 next_t = time.perf_counter()
@@ -2141,14 +2342,26 @@ class InferenceWindow(QMainWindow):
 
     def _present_live(self):
         """Show the newest decoded frame. Inference runs beside this, not in front of it."""
+        if self._calibrating:
+            return
         with self._latest_lock:
             item = self._latest
         if item is not None:
             index, frame = item
-            if index != self._shown_i:
+            live = isinstance(self._source_path, str) and self._source_path.startswith("gz://")
+            boxes_id = id(self._last_players)
+            if index != self._shown_i or (live and boxes_id != self._painted_players):
                 self._shown_i = index
                 self._frame_i = index
-                if self._last_annotated is None or self._scrubbing:
+                self._shown_raw = frame
+                if live:
+                    self._painted_players = boxes_id
+                    view = frame
+                    if self._last_players:
+                        view = _draw_player_boxes(frame, self._last_players)
+                    view = self._draw_image_trail(view)
+                    self.canvas_src.set_image(view)
+                elif self._last_annotated is None or self._scrubbing:
                     self.canvas_src.set_image(frame)
             if self._scrubbing:
                 return
@@ -2167,7 +2380,7 @@ class InferenceWindow(QMainWindow):
         """Kick off one inference in a background thread. The actual model run
         (which may block while the model loads on first use) happens off the Qt
         main thread; ``_poll_infer`` updates the canvases when it finishes."""
-        if self.detector_obj is None:
+        if self.detector_obj is None or self._calibrating:
             return
         if frame_i is None:
             frame_i = self._frame_i
@@ -2216,10 +2429,37 @@ class InferenceWindow(QMainWindow):
 
     def _run_infer(self, frame, epoch, frame_i):
         try:
-            keypoints, target, players = self._detect_parallel(frame)
-            if players is not None:
-                if self.number_on and self.number_obj is not None and players:
-                    players = self.number_obj.recognize(frame, players)
+            now = time.perf_counter()
+            live = self._follow_live
+            reuse_h = (
+                live and self._cached_kpts is not None
+                and now - self._cached_h_time < 1.5
+                and len(self._cached_kpts) >= 4)
+            if reuse_h:
+                keypoints = self._cached_kpts
+                target = self._cached_target
+                players = None
+                if self.player_on and self.player_obj is not None:
+                    players = self.player_obj.detect(frame)
+            else:
+                keypoints, target, players = self._detect_parallel(frame)
+                if live and len(keypoints) >= 4:
+                    self._cached_kpts = keypoints
+                    self._cached_target = target
+                    self._cached_h_time = now
+            if players is not None and self.number_on and self.number_obj is not None and players:
+                ocr = self.number_obj
+                ocr.pump()
+                if ocr.error:
+                    raise RuntimeError(ocr.error)
+                if ocr.last:
+                    self._cached_numbers = [
+                        (_split_box(item)[2], _split_box(item)[3]) for item in ocr.last]
+                fresh_ocr = (not live) or now - self._cached_ocr_time >= 0.8
+                if fresh_ocr and ocr.submit(frame, players):
+                    self._cached_ocr_time = now
+                if self._cached_numbers:
+                    players = _reuse_numbers(players, self._cached_numbers)
             annotated, topdown = _render_views(
                 frame, keypoints, target, self.config, self.scale, players=players)
             self._infer_result = (
@@ -2237,8 +2477,12 @@ class InferenceWindow(QMainWindow):
         self._infer_thread = None
         (epoch, frame_i, frame, annotated, topdown,
          keypoints, target, players, err) = self._infer_result
-        if epoch != self._infer_epoch:
+        if epoch != self._infer_epoch or self._calibrating:
             self._submitted_i = -1
+            self._frame_consumed = True
+            if self._reload_detector and not self._calibrating and self._last_frame is not None:
+                self._reload_detector = False
+                self._process_frame(self._last_frame, self._shown_i)
             return
         if err is not None:
             self.status.setText(f"推理失败: {err}")
@@ -2254,9 +2498,15 @@ class InferenceWindow(QMainWindow):
         self._last_target = target
         self._last_players = players
         self._last_annotated = annotated
+        self._update_tracks(players, keypoints, target, frame)
         self._rematch_selection()
+        self._sync_gimbal()
+        self._last_topdown = topdown
+        topdown = self._draw_pitch_trail(topdown)
         self._frame_i = frame_i
-        self._refresh_src_view()
+        if not (isinstance(self._source_path, str) and self._source_path.startswith("gz://")) \
+                and frame_i == self._shown_i:
+            self._refresh_src_view()
         self.canvas_map.set_image(topdown)
         self._sync_slider()
         self._frame_consumed = True
@@ -2289,6 +2539,52 @@ class InferenceWindow(QMainWindow):
 
     def _open_camera(self):
         self._start_source(0)
+
+    def _player_motion_enabled(self):
+        flag = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "sim", "gazebo", "player_motion_enabled")
+        try:
+            with open(flag, encoding="utf-8") as f:
+                return f.read().strip() not in ("0", "off", "false")
+        except OSError:
+            return True
+
+    def _toggle_player_motion(self, checked):
+        flag = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "sim", "gazebo", "player_motion_enabled")
+        with open(flag, "w", encoding="utf-8") as f:
+            f.write("1\n" if checked else "0\n")
+        self.status.setText("球员运动：开" if checked else "球员运动：关")
+
+    def _open_gazebo(self):
+        self.status.setText("正在连接仿真相机 /pitch_camera …")
+        self.btn_gz.setEnabled(False)
+        QApplication.processEvents()
+        if not self._build_detector():
+            self.btn_gz.setEnabled(True)
+            return
+
+        def connect():
+            cap, err = None, None
+            try:
+                cap = _open_capture("gz://pitch_camera")
+                if cap is None:
+                    err = "无法订阅 /pitch_camera"
+            except Exception as exc:  # noqa: BLE001
+                err = str(exc)
+            self.gz_ready.emit((cap, err))
+
+        threading.Thread(target=connect, daemon=True).start()
+
+    def _on_gz_ready(self, result):
+        cap, err = result
+        self.btn_gz.setEnabled(True)
+        if err or cap is None:
+            self.status.setText(f"仿真相机连接失败：{err or '无画面'}")
+            return
+        self._start_source("gz://pitch_camera", cap=cap)
 
     def _open_rtsp(self):
         url = self.edit_rtsp.text().strip()
@@ -2332,20 +2628,32 @@ class InferenceWindow(QMainWindow):
             self._clear_closeup()
             self._rerun_last()
 
+    def _player_backend_name(self):
+        """Color detector only for the Gazebo camera. Everything else uses YOLO."""
+        configured = str(self.settings.get("player_backend", "auto")).lower()
+        if configured in ("yolo", "sim"):
+            return configured
+        src = self._source_path if isinstance(self._source_path, str) else ""
+        return "sim" if src.startswith("gz://") else "yolo"
+
     def _start_player(self):
+        backend = self._player_backend_name()
         path = self.edit_player.text().strip() or _default_player_model()
-        if not path:
-            self.status.setText("请先选择球员权重（默认 weights/players.pt）。")
-            return False
-        if not os.path.isfile(path):
-            self.status.setText(f"找不到球员权重: {path}")
-            return False
+        if backend != "sim":
+            if not path:
+                self.status.setText("请先选择球员权重（默认 weights/players.pt）。")
+                return False
+            if not os.path.isfile(path):
+                self.status.setText(f"找不到球员权重: {path}")
+                return False
         self._close_player()
         try:
             self.player_obj = SubprocessPlayerDetector(
-                path, self.combo_device.currentData(), settings=self.settings)
+                path, self.combo_device.currentData(), settings=self.settings,
+                backend=backend)
             self.player_on = True
-            self.edit_player.setText(path)
+            if path:
+                self.edit_player.setText(path)
             return True
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f"球员检测器启动失败: {exc}")
@@ -2447,6 +2755,11 @@ class InferenceWindow(QMainWindow):
         return best_i
 
     def _on_src_click(self, x, y):
+        if self._calibrating:
+            self._calib_src.append((float(x), float(y)))
+            self.canvas_src.set_marks(self._calib_src)
+            self._calib_status()
+            return
         idx = self._hit_player(x, y)
         if idx is None:
             self._clear_closeup()
@@ -2456,28 +2769,330 @@ class InferenceWindow(QMainWindow):
         self.ocr_window.user_closed = False
         self._selected_item = item
         self._selected_xyxy = np.asarray(xyxy, dtype=np.float32).copy()
+        if idx < len(getattr(self, "_track_ids", [])):
+            self._selected_track = self._track_ids[idx]
+        self._sync_gimbal()
         self._refresh_src_view()
+        if self._last_topdown is not None:
+            self.canvas_map.set_image(self._draw_pitch_trail(self._last_topdown))
+
+    def _on_map_click(self, x, y):
+        if not self._calibrating:
+            return
+        self._calib_map.append((float(x), float(y)))
+        self.canvas_map.set_marks(self._calib_map)
+        self._calib_status()
+
+    def _toggle_calib(self):
+        if self.btn_calib.isChecked():
+            self._begin_calib()
+        else:
+            self._exit_calib()
+
+    def _begin_calib(self):
+        frame = self._shown_raw if self._shown_raw is not None else self._last_frame
+        if frame is None:
+            self.btn_calib.setChecked(False)
+            self.status.setText("请先打开图片、视频或相机，再标定。")
+            return
+        self._set_method("homography")
+        self._set_paused(True)
+        self._infer_epoch += 1
+        self._calibrating = True
+        self._calib_frame = np.ascontiguousarray(frame).copy()
+        self._calib_src = []
+        self._calib_map = []
+        pitch = draw_pitch(
+            self.config, padding=self._calib_padding, scale=self._calib_scale)
+        self._clear_closeup()
+        self.canvas_src.set_image(self._calib_frame)
+        self.canvas_src.set_marks([])
+        self.canvas_map.set_image(pitch)
+        self.canvas_map.set_marks([])
+        self.lbl_src.setText("原图 · 按顺序点击球场点")
+        self.lbl_map.setText("球场模板 · 同一顺序点击对应点")
+        self.btn_calib_save.setEnabled(True)
+        self.btn_calib_undo.setEnabled(True)
+        self.btn_calib.setText("退出标定")
+        self._calib_status()
+
+    def _exit_calib(self, rerun=True):
+        was = self._calibrating
+        frame = self._calib_frame
+        self._calibrating = False
+        self.btn_calib.setChecked(False)
+        self.btn_calib.setText("标定")
+        self.btn_calib_save.setEnabled(False)
+        self.btn_calib_undo.setEnabled(False)
+        self.canvas_src.set_marks([])
+        self.canvas_map.set_marks([])
+        self.lbl_src.setText("原图 · 点击球员看特写")
+        self.lbl_map.setText("俯视图 · 球场线叠加")
+        if not was:
+            return
+        if rerun and self.detector_obj is not None and frame is not None:
+            self._process_frame(frame, self._shown_i)
+        elif frame is not None:
+            self.canvas_src.set_image(frame)
+            if not rerun:
+                return
+            self.canvas_map.clear()
+
+    def _undo_calib_point(self):
+        if not self._calibrating:
+            return
+        if len(self._calib_src) > len(self._calib_map) and self._calib_src:
+            self._calib_src.pop()
+        elif self._calib_map:
+            self._calib_map.pop()
+        elif self._calib_src:
+            self._calib_src.pop()
+        self.canvas_src.set_marks(self._calib_src)
+        self.canvas_map.set_marks(self._calib_map)
+        self._calib_status()
+
+    def _calib_status(self):
+        self.status.setText(
+            f"标定中 · 左 {len(self._calib_src)} 点 / 右 {len(self._calib_map)} 点。"
+            "两边数量要一致，且至少 4 对。点「保存标定」写入 JSON 并用于当前画面。")
+
+    def _save_calib(self):
+        if not self._calibrating or self._calib_frame is None:
+            return
+        if len(self._calib_src) < 4 or len(self._calib_src) != len(self._calib_map):
+            QMessageBox.warning(
+                self, "点数不够",
+                f"左右都要至少 4 个点，而且数量相同。\n"
+                f"当前左 {len(self._calib_src)} / 右 {len(self._calib_map)}。")
+            return
+        src = np.asarray(self._calib_src, dtype=np.float32)
+        pad = float(self._calib_padding)
+        scale = float(self._calib_scale)
+        tgt = np.asarray(
+            [((px - pad) / scale, (py - pad) / scale) for px, py in self._calib_map],
+            dtype=np.float32)
+        homography, _ = cv2.findHomography(src, tgt)
+        if homography is None:
+            QMessageBox.warning(self, "无法计算", "这些点算不出单应，请换一组不共线的点。")
+            return
+        path = self.edit_model.text().strip()
+        if not path.lower().endswith(".json"):
+            default = "calibration.json"
+            if self._source_path:
+                stem, _ext = os.path.splitext(self._source_path)
+                default = stem + "_calibration.json"
+            path, _ = QFileDialog.getSaveFileName(
+                self, "保存标定 JSON", default, "JSON (*.json)")
+            if not path:
+                return
+        with open(path, "w") as f:
+            json.dump({
+                "sport": "soccer",
+                "source": src.tolist(),
+                "target": tgt.tolist(),
+                "homography": homography.tolist(),
+                "length": self.config.length,
+                "width": self.config.width,
+            }, f, indent=2)
+        self.edit_model.setText(path)
+        frame = self._calib_frame
+        self._exit_calib(rerun=False)
+        if not self._build_detector():
+            self.status.setText(f"已保存 {path}，但没有载入检测器。")
+            return
+        self._calib_frame = frame
+        self._process_frame(frame, self._shown_i)
+        self.status.setText(f"已保存并使用标定: {path}")
+
+    @staticmethod
+    def _blend_point(history, point, alpha):
+        """Trail point. The box used for identity stays raw; only the drawn point is blended."""
+        if not history:
+            return point
+        px, py = history[-1]
+        return (
+            (1.0 - alpha) * px + alpha * float(point[0]),
+            (1.0 - alpha) * py + alpha * float(point[1]),
+        )
+
+    def _foot(self, xyxy):
+        x1, y1, x2, y2 = (float(v) for v in xyxy)
+        return ((x1 + x2) * 0.5, y2)
+
+    def _pitch_of(self, xyxy, transformer):
+        if transformer is None:
+            return None
+        cx, foot = self._foot(xyxy)
+        mapped = transformer.transform_points(
+            np.array([[cx, foot]], np.float32))[0] / self.scale
+        if not (0.0 <= mapped[0] <= self.config.length
+                and 0.0 <= mapped[1] <= self.config.width):
+            return None
+        return (float(mapped[0]), float(mapped[1]))
+
+    def _shirt_hue(self, frame, xyxy):
+        """Median hue of the saturated torso pixels, or None if there is no colour."""
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = (float(v) for v in xyxy)
+        bw, bh = x2 - x1, y2 - y1
+        if bw < 4 or bh < 8:
+            return None
+        xa = max(0, int(x1 + 0.3 * bw))
+        xb = min(w, int(x1 + 0.7 * bw))
+        ya = max(0, int(y1 + 0.2 * bh))
+        yb = min(h, int(y1 + 0.55 * bh))
+        if xb - xa < 2 or yb - ya < 2:
+            return None
+        hsv = cv2.cvtColor(frame[ya:yb, xa:xb], cv2.COLOR_BGR2HSV)
+        sat, val = hsv[:, :, 1], hsv[:, :, 2]
+        keep = (sat > 60) & (val > 40)
+        if int(keep.sum()) < 8:
+            return None
+        return float(np.median(hsv[:, :, 0][keep]))
+
+    @staticmethod
+    def _hue_dist(a, b):
+        d = abs(float(a) - float(b)) % 180.0
+        return min(d, 180.0 - d)
+
+    def _update_tracks(self, players, keypoints, target, frame):
+        """Keep one trail per person by predicted position and shirt colour."""
+        transformer = None
+        if keypoints is not None and len(keypoints) >= 4:
+            try:
+                transformer = ViewTransformer(
+                    source=keypoints, target=target * self.scale,
+                    image_shape=frame.shape)
+            except ValueError:
+                transformer = None
+        dets = []
+        for item in players or []:
+            cls, _conf, xyxy, _number = _split_box(item)
+            xyxy = np.asarray(xyxy, dtype=np.float32)
+            dets.append({
+                "item": item,
+                "cls": int(cls),
+                "xyxy": xyxy,
+                "pitch": self._pitch_of(xyxy, transformer),
+                "hue": self._shirt_hue(frame, xyxy),
+            })
+        existing = list(self._tracks)
+        pairs = []
+        for ti in existing:
+            tr = self._tracks[ti]
+            # Constant-velocity coast from the last measurement. One step
+            # ahead when the track was seen last update, further while hidden.
+            step = tr["miss"] + 1
+            pred = np.asarray(tr["xyxy"], dtype=np.float32).copy()
+            pred[[0, 2]] += tr["vx"] * step
+            pred[[1, 3]] += tr["vy"] * step
+            ax1, ay1, ax2, ay2 = (float(v) for v in pred)
+            acx, acy = (ax1 + ax2) * 0.5, (ay1 + ay2) * 0.5
+            speed = (tr["vx"] ** 2 + tr["vy"] ** 2) ** 0.5
+            gate = max(36.0, min(80.0, 24.0 + speed * step * 1.5))
+            for di, det in enumerate(dets):
+                person_a = tr["cls"] in _PERSON_CLASSES
+                person_b = det["cls"] in _PERSON_CLASSES
+                if person_a != person_b:
+                    continue
+                if (tr.get("hue") is not None and det["hue"] is not None
+                        and self._hue_dist(tr["hue"], det["hue"]) > 18.0):
+                    continue
+                bx1, by1, bx2, by2 = (float(v) for v in det["xyxy"])
+                bcx, bcy = (bx1 + bx2) * 0.5, (by1 + by2) * 0.5
+                dist = ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5
+                if dist > gate:
+                    continue
+                pairs.append((dist, ti, di))
+        pairs.sort()
+        taken_t, taken_d = set(), set()
+        assign = [None] * len(dets)
+        for _score, ti, di in pairs:
+            if ti in taken_t or di in taken_d:
+                continue
+            taken_t.add(ti)
+            taken_d.add(di)
+            assign[di] = ti
+            det = dets[di]
+            tr = self._tracks[ti]
+            old = self._foot(tr["xyxy"])
+            new = self._foot(det["xyxy"])
+            dt = max(1, tr["miss"] + 1)
+            nvx = (new[0] - old[0]) / dt
+            nvy = (new[1] - old[1]) / dt
+            tr["vx"] = 0.65 * tr["vx"] + 0.35 * nvx
+            tr["vy"] = 0.65 * tr["vy"] + 0.35 * nvy
+            tr["xyxy"] = det["xyxy"]
+            if det["hue"] is not None:
+                tr["hue"] = det["hue"]
+            tr["cls"] = det["cls"]
+            tr["item"] = det["item"]
+            tr["miss"] = 0
+            tr["img"].append(self._blend_point(tr.get("img"), new, 0.4))
+            if len(tr["img"]) > 240:
+                del tr["img"][:-240]
+            if det["pitch"] is not None:
+                tr["pitch"].append(self._blend_point(tr.get("pitch"), det["pitch"], 0.4))
+                if len(tr["pitch"]) > 240:
+                    del tr["pitch"][:-240]
+        for di, det in enumerate(dets):
+            if di in taken_d:
+                continue
+            tid = self._next_track
+            self._next_track += 1
+            self._tracks[tid] = {
+                "xyxy": det["xyxy"],
+                "cls": det["cls"],
+                "item": det["item"],
+                "miss": 0,
+                "vx": 0.0,
+                "vy": 0.0,
+                "hue": det["hue"],
+                "img": [self._foot(det["xyxy"])],
+                "pitch": [det["pitch"]] if det["pitch"] is not None else [],
+            }
+            assign[di] = tid
+        for ti in existing:
+            if ti in taken_t or ti not in self._tracks:
+                continue
+            self._tracks[ti]["miss"] += 1
+            if self._tracks[ti]["miss"] > 15:
+                del self._tracks[ti]
+                if self._selected_track == ti:
+                    self._selected_track = None
+        self._track_ids = assign
+
+    def _draw_image_trail(self, view):
+        tr = self._tracks.get(self._selected_track) if view is not None else None
+        if tr is None or len(tr["img"]) < 2:
+            return view
+        out = view.copy()
+        pts = np.array([(int(x), int(y)) for x, y in tr["img"]], dtype=np.int32)
+        cv2.polylines(out, [pts], False, (0, 220, 255), 2, cv2.LINE_AA)
+        return out
+
+    def _draw_pitch_trail(self, topdown):
+        tr = self._tracks.get(self._selected_track) if topdown is not None else None
+        if tr is None or len(tr["pitch"]) < 2:
+            return topdown
+        from pitch_view.annotators.soccer import _pt
+        out = topdown.copy()
+        pts = np.array(
+            [_pt(x, y, self.scale, 40) for x, y in tr["pitch"]], dtype=np.int32)
+        cv2.polylines(out, [pts], False, (0, 220, 255), 2, cv2.LINE_AA)
+        return out
 
     def _rematch_selection(self):
-        if self._selected_xyxy is None or not self._last_players:
-            if not self._last_players:
+        if self._selected_track is None or self._selected_track not in self._tracks:
+            if self._selected_track is not None:
                 self._selected_xyxy = None
                 self._selected_item = None
+                self._selected_track = None
             return
-        best_item, best_iou = None, 0.0
-        for item in self._last_players:
-            _, _, xyxy, _ = _split_box(item)
-            iou, _ = _xyxy_overlap(self._selected_xyxy, xyxy)
-            if iou > best_iou:
-                best_item, best_iou = item, iou
-        if best_item is not None and best_iou >= float(
-                self.settings.get("closeup_track_iou", 0.3)):
-            _, _, xyxy, _ = _split_box(best_item)
-            self._selected_item = best_item
-            self._selected_xyxy = np.asarray(xyxy, dtype=np.float32).copy()
-        else:
-            self._selected_xyxy = None
-            self._selected_item = None
+        tr = self._tracks[self._selected_track]
+        if tr["miss"] == 0:
+            self._selected_item = tr["item"]
+            self._selected_xyxy = np.asarray(tr["xyxy"], dtype=np.float32).copy()
 
     def _refresh_src_view(self):
         if self._last_annotated is None:
@@ -2517,7 +3132,7 @@ class InferenceWindow(QMainWindow):
         else:
             self.closeup.hide()
             self._sync_ocr_window(None)
-        self.canvas_src.set_image(view)
+        self.canvas_src.set_image(self._draw_image_trail(view))
 
     def _sync_ocr_window(self, item):
         if not self.ocr_detail_on:
@@ -2549,10 +3164,89 @@ class InferenceWindow(QMainWindow):
     def _clear_closeup(self):
         self._selected_xyxy = None
         self._selected_item = None
+        self._selected_track = None
+        self._sync_gimbal()
         self.closeup.hide()
         self.ocr_window.dismiss()
         if self._last_annotated is not None:
             self.canvas_src.set_image(self._last_annotated)
+
+    def _sync_gimbal(self):
+        tr = self._tracks.get(self._selected_track)
+        pt = tr["pitch"][-1] if tr and tr.get("pitch") else None
+        with self._gimbal_lock:
+            self._gimbal_target = pt
+            self._gimbal_track = self._selected_track if pt is not None else None
+
+    def _start_tele(self):
+        self._stop_tele()
+        self._gimbal_stop = threading.Event()
+        self._gimbal_thread = threading.Thread(
+            target=self._gimbal_loop, daemon=True)
+        self._gimbal_thread.start()
+        self._tele_thread = threading.Thread(
+            target=self._tele_loop, daemon=True)
+        self._tele_thread.start()
+
+    def _stop_tele(self):
+        if self._gimbal_stop is not None:
+            self._gimbal_stop.set()
+        if self._tele_cap is not None:
+            self._tele_cap.release()
+            self._tele_cap = None
+        if self._gimbal_thread is not None:
+            self._gimbal_thread.join(timeout=0.5)
+            self._gimbal_thread = None
+        if self._tele_thread is not None:
+            self._tele_thread.join(timeout=0.5)
+            self._tele_thread = None
+        self._gimbal_stop = None
+        if hasattr(self, "canvas_tele"):
+            self.canvas_tele.clear()
+
+    def _gimbal_loop(self):
+        try:
+            from pitch_view.common.gz_gimbal import TeleGimbal, template_cm_to_world
+            gimbal = TeleGimbal()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[gimbal] {exc}", file=sys.stderr, flush=True)
+            return
+        stop = self._gimbal_stop
+        while stop is not None and not stop.is_set():
+            with self._gimbal_lock:
+                pt = self._gimbal_target
+                track = self._gimbal_track
+                frame = self._tele_frame
+                seq = self._tele_seq
+            fresh = frame if seq != self._tele_seen else None
+            self._tele_seen = seq
+            target = template_cm_to_world(*pt) if pt is not None else (0.0, 0.0, 1.0)
+            try:
+                gimbal.aim_world(target, frame=fresh, track_id=track)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[gimbal] {exc}", file=sys.stderr, flush=True)
+                return
+            if stop.wait(0.03):
+                return
+
+    def _tele_loop(self):
+        from pitch_view.common.gz_camera import open_gz_source
+        cap = open_gz_source("gz://tele_camera")
+        self._tele_cap = cap
+        if cap is None or not cap.isOpened():
+            return
+        stop = self._gimbal_stop
+        while stop is not None and not stop.is_set():
+            ok, frame = cap.read()
+            if not ok:
+                return
+            with self._gimbal_lock:
+                self._tele_frame = frame
+                self._tele_seq += 1
+            self.tele_frame.emit(frame)
+
+    def _show_tele_frame(self, frame):
+        self.canvas_tele.set_image(frame)
 
     def closeEvent(self, event):
         self._stop_source()
